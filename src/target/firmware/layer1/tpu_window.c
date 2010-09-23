@@ -67,30 +67,73 @@ static const uint16_t tx_burst_duration[_NUM_L1_TXWIN] = {
 	[L1_TXWIN_AB]	= L1_TX_AB_DURATION_Q,
 };
 
+/* shift TPU window and compensate frame number */
+static int tpu_shift(void)
+{
+	int16_t shift = l1s.tpu_offset_shift;
+	int fn_diff;
+
+	if (shift == 0)
+		return 0;
+
+	/* Wait until it is safe to shift.
+	 * We need to add 2 to safe_fn, so we can be sure that DSP execution
+	 * and response task has been processed already. */
+	fn_diff = (l1s.mframe_sched.safe_fn + 2 - l1s.current_time.fn + GSM_MAX_FN) % GSM_MAX_FN;
+	if ((fn_diff > 0 && fn_diff < (GSM_MAX_FN>>1)) /* safe_fn is in the future */
+	 && (l1s.mframe_sched.safe_fn < GSM_MAX_FN)) /* and safe_fn is already set */
+{
+printf("unsafe to shift, wait %d fn\n", fn_diff);
+		return 0;
+}
+printf("safe_fn is %d, current fn is %d\n", l1s.mframe_sched.safe_fn, l1s.current_time.fn);
+
+	if (shift <= -(L1_TDMA_LENGTH_Q) || shift >= L1_TDMA_LENGTH_Q) {
+		puts("Fatal error: tpu_offset_shift out of range.\n");
+		return 0;
+	}
+
+	if (shift < 0) {
+		printf("Negative TPU Chg (%d qbits), shift forward...\n",
+			shift);
+		shift += L1_TDMA_LENGTH_Q;
+		l1s.current_time = l1s.next_time;
+		l1s_time_inc(&l1s.next_time, 1);
+		if (l1s.mframe_sched.safe_fn < GSM_MAX_FN)
+			ADD_MODULO(l1s.mframe_sched.safe_fn, 1, GSM_MAX_FN);
+	} else
+		printf("TPU Chg forth by %d qbits!\n",
+			shift);
+
+printf("shifting from old tpu offset %d\n", l1s.tpu_offset);
+	l1s.tpu_offset = (l1s.tpu_offset + shift) % L1_TDMA_LENGTH_Q;
+	l1s.tpu_offset_shift = 0;
+
+	return 1;
+}
 
 static int _win_setup(__unused uint8_t p1, __unused uint8_t p2, __unused uint16_t p3)
 {
-	uint8_t tn;
-
-	rfch_get_params(&l1s.next_time, NULL, NULL, &tn);
-
-	l1s.tpu_offset = (5000 + l1s.tpu_offset + l1s.tpu_offset_correction) % 5000;
+	l1s.tpu_offset = (l1s.tpu_offset + l1s.tpu_offset_correction + L1_TDMA_LENGTH_Q)
+				% L1_TDMA_LENGTH_Q;
 	l1s.tpu_offset_correction = 0;
 
 	tpu_enq_at(4740);
-	tpu_enq_sync((5000 + l1s.tpu_offset + (L1_BURST_LENGTH_Q * tn)) % 5000);
+	tpu_enq_sync(l1s.tpu_offset);
 
 	return 0;
 }
 
 static int _win_cleanup(__unused uint8_t p1, __unused uint8_t p2, __unused uint16_t p3)
 {
-	uint8_t tn;
-
-	rfch_get_params(&l1s.next_time, NULL, NULL, &tn);
+	if (tpu_shift()) {
+#warning HACK!!!!
+		tpu_enq_sleep();
+printf("shifting to new tpu offset %d\n", l1s.tpu_offset);
+	}
 
 	/* restore offset */
-	tpu_enq_offset((5000 + l1s.tpu_offset + (L1_BURST_LENGTH_Q * tn)) % 5000);
+	tpu_enq_offset(l1s.tpu_offset);
 
 	return 0;
 }

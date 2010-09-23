@@ -258,6 +258,10 @@ static void l1_sync(void)
 	 * TDMA frame (including setup/cleanup steps) */
 	sched_flags = tdma_sched_flag_scan();
 
+	/* if tpu offset needs to be shifted, schedule tpu scenario */
+	if (l1s.tpu_offset_shift)
+		sched_flags |= TDMA_IFLG_TPU;
+
 	if (sched_flags & TDMA_IFLG_TPU)
 		l1s_win_init();
 
@@ -367,6 +371,11 @@ void l1s_reset(void)
 
 	/* Leave dedicated mode */
 	l1s.dedicated.type = GSM_DCHAN_NONE;
+	l1s.dedicated.tn = 0;
+
+	/* reset TPU offset shift/correction */
+	l1s.tpu_offset_correction = 0;
+	l1s.tpu_offset_shift = 0;
 
 	/* reset scheduler and hardware */
 	sched_gsmtime_reset();
